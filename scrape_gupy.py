@@ -227,41 +227,106 @@ class GupyScraper:
                 self.driver.quit()
 
 
+def load_keywords(filename: str = 'keywords.json') -> List[str]:
+    """Carrega lista de keywords do arquivo JSON"""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            keywords = json.load(f)
+        return keywords if isinstance(keywords, list) else []
+    except FileNotFoundError:
+        print(f"⚠️ Arquivo {filename} não encontrado. Usando keyword padrão 'vagas'")
+        return ['vagas']
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Erro ao ler {filename}: {e}. Usando keyword padrão 'vagas'")
+        return ['vagas']
+
+
+def deduplicate_jobs(jobs: List[Dict]) -> List[Dict]:
+    """Remove vagas duplicadas baseado no link"""
+    seen_links = set()
+    unique_jobs = []
+    
+    for job in jobs:
+        if job['link'] not in seen_links:
+            seen_links.add(job['link'])
+            unique_jobs.append(job)
+    
+    return unique_jobs
+
+
 def main():
     """Função principal"""
     # Configurações
-    term = 'vagas'          # Mude aqui para outro termo (ex: "backend", "java", "pleno")
     remote_only = True      # False para buscar também presencial/híbrido
-    max_pages = 10          # Limite de páginas a percorrer
+    max_pages = 5           # Limite de páginas por keyword (reduzido para múltiplas buscas)
     headless = True         # False para ver o browser funcionando
     
+    # Carrega keywords do arquivo
+    keywords = load_keywords()
+    
     print("🔍 Iniciando scraping de vagas da Gupy...")
-    print(f"Termo de busca: '{term}'")
+    print(f"Keywords encontradas: {', '.join(keywords)}")
     print(f"Apenas remotas: {remote_only}")
-    print(f"Máximo de páginas: {max_pages}")
+    print(f"Máximo de páginas por keyword: {max_pages}")
     print("-" * 50)
     
     scraper = GupyScraper()
-    jobs = scraper.scrape_jobs(term=term, remote_only=remote_only, max_pages=max_pages, headless=headless)
+    all_jobs = []
+    
+    # Busca por cada keyword
+    for i, keyword in enumerate(keywords, 1):
+        print(f"\n🔍 Buscando por '{keyword}' ({i}/{len(keywords)})...")
+        
+        try:
+            jobs = scraper.scrape_jobs(
+                term=keyword, 
+                remote_only=remote_only, 
+                max_pages=max_pages, 
+                headless=headless
+            )
+            
+            if jobs:
+                print(f"✅ Encontradas {len(jobs)} vagas para '{keyword}'")
+                all_jobs.extend(jobs)
+            else:
+                print(f"⚠️ Nenhuma vaga encontrada para '{keyword}'")
+                
+        except Exception as e:
+            print(f"❌ Erro ao buscar '{keyword}': {e}")
+            continue
+    
+    # Remove duplicatas
+    print(f"\n🔄 Removendo duplicatas...")
+    unique_jobs = deduplicate_jobs(all_jobs)
+    duplicates_removed = len(all_jobs) - len(unique_jobs)
+    
+    if duplicates_removed > 0:
+        print(f"✅ Removidas {duplicates_removed} vagas duplicadas")
     
     # Salva o resultado em JSON
     output_file = 'vagas_gupy.json'
     with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(jobs, f, ensure_ascii=False, indent=2)
+        json.dump(unique_jobs, f, ensure_ascii=False, indent=2)
     
-    print(f"✅ Salvo {len(jobs)} vagas em {output_file}")
+    print(f"\n✅ Salvo {len(unique_jobs)} vagas únicas em {output_file}")
     
     # Mostra algumas estatísticas
-    if jobs:
-        empresas = set(job['empresa'] for job in jobs if job['empresa'])
-        remotas = sum(1 for job in jobs if job['remoto'])
-        tipos_contrato = set(job['tipoContrato'] for job in jobs if job['tipoContrato'])
+    if unique_jobs:
+        empresas = set(job['empresa'] for job in unique_jobs if job['empresa'])
+        remotas = sum(1 for job in unique_jobs if job['remoto'])
+        tipos_contrato = set(job['tipoContrato'] for job in unique_jobs if job['tipoContrato'])
         
-        print(f"\n📊 Estatísticas:")
-        print(f"   • Total de vagas: {len(jobs)}")
+        print(f"\n📊 Estatísticas Finais:")
+        print(f"   • Total de vagas únicas: {len(unique_jobs)}")
         print(f"   • Empresas diferentes: {len(empresas)}")
         print(f"   • Vagas remotas: {remotas}")
         print(f"   • Tipos de contrato encontrados: {', '.join(sorted(tipos_contrato)) if tipos_contrato else 'Nenhum'}")
+        
+        # Estatísticas por keyword
+        print(f"\n📈 Vagas por keyword:")
+        for keyword in keywords:
+            keyword_jobs = [job for job in unique_jobs if keyword.lower() in job['nome'].lower() or keyword.lower() in job.get('empresa', '').lower()]
+            print(f"   • {keyword}: {len(keyword_jobs)} vagas")
 
 
 if __name__ == "__main__":
