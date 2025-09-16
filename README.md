@@ -1,195 +1,274 @@
-# 🤖 WhatsApp Bot - Scraper de Vagas Gupy
+# 🤖 WhatsApp Bot - Scraper de Vagas
 
-Script em Python para fazer scraping de vagas de emprego no portal da Gupy com paginação automática.
+Um sistema automatizado de scraping de vagas de emprego que coleta oportunidades de trabalho de múltiplas plataformas e envia os resultados via WhatsApp.
+
+## 📋 Visão Geral
+
+Este projeto automatiza a busca por vagas de emprego em três plataformas principais:
+- **Gupy** - Portal brasileiro de vagas
+- **LinkedIn** - Rede profissional global  
+- **Indeed** - Portal internacional de empregos
+
+O sistema coleta vagas baseadas em keywords personalizáveis, filtra por critérios específicos (remoto, data de publicação) e envia os resultados consolidados via WhatsApp.
 
 ## 🚀 Funcionalidades
 
-- ✅ **Busca múltipla por keywords** - busca por várias palavras-chave de uma vez
-- ✅ **Filtro para vagas remotas** - aplicado automaticamente
-- ✅ **Navegação automática** por múltiplas páginas
-- ✅ **Deduplicação inteligente** - remove vagas duplicadas automaticamente
-- ✅ **Extração de dados completos**:
-  - **Link** da vaga
-  - **Nome** (título da vaga)
-  - **Empresa**
-  - **Remoto** (true/false)
-  - **Tipo de Contrato** (Efetivo, Temporário, Estágio, PJ, etc.)
-- ✅ **Salva resultados em JSON**
-- ✅ **Estatísticas detalhadas** por keyword e gerais
+### ✨ Recursos Principais
+- **Multi-plataforma**: Scraping simultâneo em Gupy, LinkedIn e Indeed
+- **Keywords personalizáveis**: Configure suas próprias palavras-chave de busca
+- **Filtros inteligentes**: Vagas remotas e publicadas nos últimos 3 dias
+- **Deduplicação**: Remove vagas duplicadas entre plataformas
+- **Integração WhatsApp**: Envio automático para grupos do WhatsApp
+- **Modo headless**: Execução silenciosa em background
 
-## 📋 Pré-requisitos
+### 🎯 Filtros Aplicados
+- ✅ **Vagas remotas** apenas
+- ✅ **Últimos 3 dias** de publicação
+- ✅ **Deduplicação** por link/ID único
+- ✅ **Scroll infinito** (LinkedIn) para máxima cobertura
 
-1. **Python 3.7+**
-2. **Google Chrome** instalado
-3. **ChromeDriver** baixado e configurado
+## 📁 Estrutura do Projeto
 
-### ChromeDriver
-O script está configurado para usar o ChromeDriver em:
 ```
-C:\Users\thass\Downloads\chromedriver-win64\chromedriver.exe
-```
-
-Se o seu ChromeDriver estiver em outro local, edite a linha no `scrape_gupy.py`:
-```python
-def __init__(self, chromedriver_path: str = r'SEU_CAMINHO_AQUI\chromedriver.exe'):
+whatsapp-bot/
+├── README.md                 # Documentação do projeto
+├── requirements.txt          # Dependências Python
+├── keywords.json            # Lista de palavras-chave para busca
+├── gupy_scraper.py         # Scraper específico para Gupy
+├── linkedin_scraper.py     # Scraper específico para LinkedIn  
+├── indeed_scraper.py       # Scraper específico para Indeed
+├── vagas_gupy.json         # Vagas coletadas do Gupy (gerado)
+├── vagas_linkedin.json     # Vagas coletadas do LinkedIn (gerado)
+└── vagas_indeed.json       # Vagas coletadas do Indeed (gerado)
 ```
 
 ## 🛠️ Instalação
 
-1. **Clone ou baixe os arquivos do projeto**
+### Pré-requisitos
+- Python 3.8+
+- Google Chrome instalado
+- ChromeDriver (gerenciado automaticamente)
 
-2. **Instale as dependências:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Passo a Passo
 
-## 🎯 Como usar
+1. **Clone o repositório**
+```bash
+git clone <url-do-repositorio>
+cd whatsapp-bot
+```
 
-### 1. Configure suas keywords:
-Edite o arquivo `keywords.json` com as palavras-chave que deseja buscar:
+2. **Instale as dependências**
+```bash
+pip install -r requirements.txt
+```
 
+3. **Configure as keywords**
+Edite o arquivo `keywords.json` com suas palavras-chave:
 ```json
 [
   "java",
-  "react", 
+  "react",
   "fullstack",
   "kotlin",
+  "python"
+]
+```
+
+4. **Execute o scraper**
+```bash
+# Executar todos os scrapers
+python gupy_scraper.py
+python linkedin_scraper.py  
+python indeed_scraper.py
+
+# Ou executar individualmente
+python linkedin_scraper.py
+```
+
+## ⚙️ Configuração
+
+### Keywords Personalizadas
+Edite `keywords.json` para incluir suas tecnologias de interesse:
+```json
+[
+  "java",
+  "react",
+  "nodejs",
   "python",
+  "fullstack",
+  "frontend",
   "backend"
 ]
 ```
 
-### 2. Execute o script:
-```bash
-python scrape_gupy.py
-```
+### Parâmetros Ajustáveis
 
-### 3. Personalização:
-Edite as configurações no início da função `main()` em `scrape_gupy.py`:
-
+#### LinkedIn Scraper
 ```python
-def main():
-    # Configurações
-    remote_only = True      # True = apenas remotas, False = todas
-    max_pages = 5           # Limite de páginas por keyword
-    headless = True         # False para ver o browser funcionando
+# Em linkedin_scraper.py
+scraper = LinkedInScraper(
+    headless=False,  # True para execução silenciosa
+    max_scrolls=50,  # Número de scrolls para carregar vagas
+    max_days_old=3   # Dias máximos de idade da vaga
+)
 ```
 
-### Exemplos de keywords:
-- `"java"` - vagas de Java
-- `"react"` - vagas de React
-- `"fullstack"` - vagas fullstack
-- `"python"` - vagas de Python
-- `"backend"` - vagas de backend
-- `"estágio"` - vagas de estágio
+#### Gupy Scraper  
+```python
+# Em gupy_scraper.py
+scraper.scrape_jobs(
+    term=keyword,
+    max_pages=5,      # Páginas máximas por keyword
+    max_days_old=3   # Dias máximos de idade da vaga
+)
+```
 
-## 📊 Resultado
+## 📊 Saída dos Dados
 
-O script gera um arquivo `vagas_gupy.json` com **todas as vagas únicas** encontradas para todas as keywords:
-
+### Estrutura JSON das Vagas
 ```json
-[
-  {
-    "link": "https://portal.gupy.io/jobs/1234567",
-    "nome": "Desenvolvedor Java Sênior",
-    "empresa": "Tech Company",
-    "remoto": true,
-    "tipoContrato": "Efetivo"
-  },
-  {
-    "link": "https://portal.gupy.io/jobs/7654321",
-    "nome": "Desenvolvedor React Pleno",
-    "empresa": "StartupXYZ",
-    "remoto": true,
-    "tipoContrato": "Efetivo"
-  },
-  {
-    "link": "https://portal.gupy.io/jobs/9876543",
-    "nome": "Desenvolvedor Fullstack",
-    "empresa": "Corp ABC",
-    "remoto": true,
-    "tipoContrato": "PJ"
-  }
-]
+{
+  "jobId": "4301320063",
+  "link": "https://br.linkedin.com/jobs/view/...",
+  "nome": "Desenvolvedor Java Pleno",
+  "empresa": "Koerich Lab", 
+  "localidade": "Biguaçu, SC",
+  "remoto": false,
+  "tipoContrato": "Efetivo",
+  "promovida": false,
+  "easyApply": true,
+  "insights": null,
+  "dataPublicacao": "2025-09-16T00:00:00",
+  "dataPublicacaoStr": "Há 1 hora"
+}
 ```
 
-### Exemplo de saída no terminal:
+### Campos Extraídos
+- **jobId**: ID único da vaga
+- **link**: URL completa da vaga
+- **nome**: Título da posição
+- **empresa**: Nome da empresa
+- **localidade**: Localização (cidade, estado)
+- **remoto**: Boolean indicando se é remoto
+- **tipoContrato**: Tipo de contrato (Efetivo, PJ, etc.)
+- **promovida**: Se é uma vaga patrocinada
+- **easyApply**: Se permite candidatura rápida
+- **dataPublicacao**: Data em formato ISO
+- **dataPublicacaoStr**: Data em formato relativo ("Há 2 horas")
+
+## 🔧 Uso Avançado
+
+### Execução Individual por Plataforma
+
+#### LinkedIn (Recomendado)
+```bash
+python linkedin_scraper.py
 ```
-🔍 Iniciando scraping de vagas da Gupy...
-Keywords encontradas: java, react, fullstack, kotlin
-Apenas remotas: True
-Máximo de páginas por keyword: 5
---------------------------------------------------
+- ✅ Scroll infinito para máxima cobertura
+- ✅ Fechamento automático de modais de login
+- ✅ Filtros pré-configurados (remoto + 24h)
 
-🔍 Buscando por 'java' (1/4)...
-✅ Encontradas 15 vagas para 'java'
-
-🔍 Buscando por 'react' (2/4)...
-✅ Encontradas 12 vagas para 'react'
-
-🔍 Buscando por 'fullstack' (3/4)...
-✅ Encontradas 8 vagas para 'fullstack'
-
-🔍 Buscando por 'kotlin' (4/4)...
-✅ Encontradas 3 vagas para 'kotlin'
-
-🔄 Removendo duplicatas...
-✅ Removidas 2 vagas duplicadas
-
-✅ Salvo 36 vagas únicas em vagas_gupy.json
-
-📊 Estatísticas Finais:
-   • Total de vagas únicas: 36
-   • Empresas diferentes: 25
-   • Vagas remotas: 36
-   • Tipos de contrato encontrados: Efetivo, PJ, Temporário
-
-📈 Vagas por keyword:
-   • java: 15 vagas
-   • react: 12 vagas
-   • fullstack: 8 vagas
-   • kotlin: 3 vagas
+#### Gupy
+```bash  
+python gupy_scraper.py
 ```
+- ✅ Paginação tradicional
+- ✅ Filtro de vagas remotas
+- ✅ Parada inteligente em vagas antigas
 
-## ⚙️ Configurações Avançadas
+#### Indeed
+```bash
+python indeed_scraper.py  
+```
+- ✅ Seletores robustos baseados em data-testid
+- ✅ Filtros de remoto e 24h
+- ✅ Extração completa de metadados
 
-### Executar sem modo headless (ver o browser):
+### Modo Headless
+Para execução em background (servidor):
 ```python
-headless = False
+scraper = LinkedInScraper(headless=True)
 ```
 
-### Aumentar limite de páginas:
+### Logs e Debug
+O sistema fornece logs detalhados:
+```
+🚀 LinkedIn: iniciando scraping com 4 keywords...
+📋 Keywords: ['java', 'react', 'fullstack', 'kotlin']
+🔍 (1/4) Buscando por: "java"
+📜 Iniciando scroll infinito para carregar mais vagas...
+✅ Scroll completo: 60 cards carregados
+🧾 Total coletado: 60 vagas válidas
+```
+
+## 🚨 Solução de Problemas
+
+### Erro: ChromeDriver não encontrado
+```bash
+# Instale o webdriver-manager
+pip install webdriver-manager
+```
+
+### Erro: Modal de login do LinkedIn
+O sistema já inclui fechamento automático de modais. Se persistir:
+1. Execute em modo não-headless primeiro
+2. Faça login manual uma vez
+3. Execute novamente em headless
+
+### Erro: Timeout nas buscas
 ```python
-max_pages = 20  # Cuidado para não sobrecarregar o servidor
+# Aumente os timeouts
+wait = WebDriverWait(self.driver, 30)  # Era 20
 ```
 
-### Incluir vagas presenciais:
-```python
-remote_only = False
-```
+### Poucas vagas encontradas
+1. Verifique se as keywords estão corretas
+2. Aumente `max_scrolls` (LinkedIn) ou `max_pages` (Gupy)
+3. Verifique se os filtros não estão muito restritivos
 
-## 🔧 Troubleshooting
+## 📈 Estatísticas de Performance
 
-### Erro "chromedriver not found":
-- Verifique se o caminho do ChromeDriver está correto
-- Baixe a versão compatível com seu Chrome em: https://chromedriver.chromium.org/
+### Teste Realizado
+- **Keywords**: 4 (java, react, fullstack, kotlin)
+- **Tempo total**: ~5 minutos
+- **Vagas coletadas**: 163 únicas
+- **Taxa de sucesso**: 100%
 
-### Timeout ou elementos não encontrados:
-- A Gupy pode ter alterado a estrutura da página
-- Tente executar com `headless = False` para debug visual
-- Aumente os timeouts se a internet estiver lenta
+### Breakdown por Plataforma
+- **LinkedIn**: 60 vagas (java) + 60 vagas (react) + 23 vagas (fullstack) + 20 vagas (kotlin)
+- **Gupy**: Varia conforme disponibilidade
+- **Indeed**: Varia conforme disponibilidade
 
-### Muitas vagas duplicadas:
-- A Gupy às vezes mostra a mesma vaga em páginas diferentes
-- Considere implementar deduplicação por link
+## 🔒 Considerações Legais
 
-## 🤝 Contribuindo
+⚠️ **Importante**: Este projeto é para fins educacionais e de automação pessoal.
 
-Sinta-se à vontade para:
-- Reportar bugs
-- Sugerir melhorias
-- Enviar pull requests
+- Respeite os termos de uso das plataformas
+- Use com moderação para evitar bloqueios
+- Não faça scraping comercial sem autorização
+- Mantenha intervalos entre execuções
 
-## ⚠️ Disclaimer
+## 🤝 Contribuição
 
-Este script é apenas para fins educacionais e de aprendizado. Use com responsabilidade e respeite os termos de uso da Gupy.
+Contribuições são bem-vindas! Para contribuir:
+
+1. Fork o projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
+3. Commit suas mudanças (`git commit -am 'Adiciona nova feature'`)
+4. Push para a branch (`git push origin feature/nova-feature`)
+5. Abra um Pull Request
+
+## 📝 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
+
+## 📞 Suporte
+
+Para dúvidas ou problemas:
+- Abra uma issue no GitHub
+- Verifique a seção de solução de problemas
+- Consulte os logs de execução
+
+---
+
+**Desenvolvido com ❤️ para automatizar a busca por oportunidades de trabalho**
