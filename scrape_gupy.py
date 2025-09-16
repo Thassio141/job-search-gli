@@ -9,6 +9,7 @@ Salva os dados em vagas_gupy.json
 import json
 import re
 import time
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from urllib.parse import urljoin, quote
 
@@ -46,6 +47,50 @@ class GupyScraper:
         driver.implicitly_wait(10)
         
         return driver
+
+    @staticmethod
+    def _parse_date(date_str: str) -> Optional[datetime]:
+        """Converte string de data para datetime"""
+        if not date_str:
+            return None
+            
+        # Padrões comuns de data na Gupy
+        patterns = [
+            r'(\d{1,2})/(\d{1,2})/(\d{4})',  # DD/MM/YYYY
+            r'(\d{1,2}) de (\w+) de (\d{4})',  # DD de Mês de YYYY
+            r'(\d{1,2}) de (\w+)',  # DD de Mês (ano atual)
+            r'(\d{1,2})/(\d{1,2})',  # DD/MM (ano atual)
+        ]
+        
+        current_year = datetime.now().year
+        months_pt = {
+            'janeiro': 1, 'fevereiro': 2, 'março': 3, 'abril': 4,
+            'maio': 5, 'junho': 6, 'julho': 7, 'agosto': 8,
+            'setembro': 9, 'outubro': 10, 'novembro': 11, 'dezembro': 12
+        }
+        
+        for pattern in patterns:
+            match = re.search(pattern, date_str.lower())
+            if match:
+                groups = match.groups()
+                try:
+                    if len(groups) == 3:  # DD/MM/YYYY ou DD de Mês de YYYY
+                        if pattern == patterns[0]:  # DD/MM/YYYY
+                            day, month, year = int(groups[0]), int(groups[1]), int(groups[2])
+                        else:  # DD de Mês de YYYY
+                            day, month, year = int(groups[0]), months_pt[groups[1]], int(groups[2])
+                    elif len(groups) == 2:  # DD/MM ou DD de Mês
+                        if pattern == patterns[2]:  # DD de Mês
+                            day, month = int(groups[0]), months_pt[groups[1]]
+                        else:  # DD/MM
+                            day, month = int(groups[0]), int(groups[1])
+                        year = current_year
+                    
+                    return datetime(year, month, day)
+                except (ValueError, KeyError):
+                    continue
+        
+        return None
 
     @staticmethod
     def _extract_job_info(job_card_html: str, base_url: str) -> Optional[Dict]:
@@ -121,23 +166,58 @@ class GupyScraper:
             else:
                 tipo_contrato = tipo_contrato.strip()
 
+        # Extrair data de publicação
+        data_publicacao = None
+        data_str = None
+        
+        # Procura por data nos detalhes ou em elementos específicos
+        for detail in detail_texts:
+            # Procura por padrões de data
+            if re.search(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\d{1,2}\s+de\s+\w+\s+de\s+\d{4}|\d{1,2}\s+de\s+\w+', detail):
+                data_str = detail
+                break
+        
+        # Se não encontrou nos detalhes, procura em outros elementos
+        if not data_str:
+            # Procura em elementos com classes comuns de data
+            date_elements = link_element.find_all(['time', 'span'], class_=re.compile(r'date|time|published', re.I))
+            for elem in date_elements:
+                text = elem.get_text(strip=True)
+                if re.search(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\d{1,2}\s+de\s+\w+\s+de\s+\d{4}|\d{1,2}\s+de\s+\w+', text):
+                    data_str = text
+                    break
+        
+        # Se ainda não encontrou, procura no aria-label
+        if not data_str:
+            aria_label = link_element.get('aria-label', '')
+            date_match = re.search(r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\d{1,2}\s+de\s+\w+\s+de\s+\d{4}|\d{1,2}\s+de\s+\w+)', aria_label)
+            if date_match:
+                data_str = date_match.group(1)
+        
+        # Converte string de data para datetime
+        if data_str:
+            data_publicacao = GupyScraper._parse_date(data_str)
+
         return {
             'link': link,
             'nome': nome,
             'empresa': empresa,
             'remoto': remoto,
-            'tipoContrato': tipo_contrato
+            'tipoContrato': tipo_contrato,
+            'dataPublicacao': data_publicacao.isoformat() if data_publicacao else None,
+            'dataPublicacaoStr': data_str
         }
 
-    def scrape_jobs(self, term: str = 'vagas', remote_only: bool = True, max_pages: int = 10, headless: bool = True) -> List[Dict]:
+    def scrape_jobs(self, term: str = 'vagas', remote_only: bool = True, max_pages: int = 10, headless: bool = True, max_days_old: int = 3) -> List[Dict]:
         """
-        Faz scraping de vagas na Gupy com paginação
+        Faz scraping de vagas na Gupy com paginação e parada por data
         
         Args:
             term: termo de busca
             remote_only: se True, aplica filtro remoto
             max_pages: máximo de páginas para percorrer
             headless: se True, roda o browser em modo headless
+            max_days_old: máximo de dias de idade da vaga (padrão: 3)
             
         Returns:
             Lista de dicionários com dados das vagas
@@ -166,8 +246,10 @@ class GupyScraper:
             
             all_jobs = []
             current_page = 1
+            cutoff_date = datetime.now() - timedelta(days=max_days_old)
+            found_old_job = False
             
-            while current_page <= max_pages:
+            while current_page <= max_pages and not found_old_job:
                 print(f"Processando página {current_page}...")
                 
                 # Aguarda um pouco para garantir que a página carregou
@@ -181,17 +263,43 @@ class GupyScraper:
                     break
                 
                 page_jobs = []
+                has_old_job_on_page = False
+                
                 for card in job_cards:
                     try:
                         job_info = self._extract_job_info(card.get_attribute('outerHTML'), self.base_url)
                         if job_info and job_info['link']:
-                            page_jobs.append(job_info)
+                            # Verifica se a vaga é mais antiga que o limite
+                            if job_info['dataPublicacao']:
+                                job_date = datetime.fromisoformat(job_info['dataPublicacao'])
+                                if job_date < cutoff_date:
+                                    print(f"⚠️ Vaga antiga encontrada: {job_info['nome'][:50]}... - {job_info['dataPublicacaoStr']} (> {max_days_old} dias) - IGNORADA")
+                                    has_old_job_on_page = True
+                                    # NÃO adiciona a vaga antiga, mas continua processando as outras da página
+                                    continue
+                                else:
+                                    # Vaga é recente, adiciona à lista
+                                    print(f"✅ Vaga recente: {job_info['nome'][:50]}... - {job_info['dataPublicacaoStr']} - SALVA")
+                                    page_jobs.append(job_info)
+                            else:
+                                # Se não tem data, adiciona mesmo assim (pode ser recente)
+                                print(f"📅 Vaga sem data: {job_info['nome'][:50]}... - SALVA (assumindo recente)")
+                                page_jobs.append(job_info)
                     except Exception as e:
                         print(f"Erro ao processar card de vaga: {e}")
                         continue
                 
+                # Se encontrou vaga antiga nesta página, marca para parar de avançar páginas
+                if has_old_job_on_page:
+                    print(f"🛑 Página {current_page} contém vagas antigas - não avançará para próxima página")
+                    found_old_job = True
+                
                 all_jobs.extend(page_jobs)
-                print(f"Coletadas {len(page_jobs)} vagas da página {current_page}")
+                print(f"Coletadas {len(page_jobs)} vagas recentes da página {current_page}")
+                
+                # Se encontrou vaga antiga, para de avançar páginas
+                if found_old_job:
+                    break
                 
                 # Tenta ir para a próxima página
                 try:
@@ -215,7 +323,11 @@ class GupyScraper:
                     print(f"Erro ao navegar para próxima página: {e}")
                     break
             
-            print(f"Scraping finalizado! Total de vagas coletadas: {len(all_jobs)}")
+            if found_old_job:
+                print(f"🛑 Busca interrompida para '{term}' - vaga mais antiga que {max_days_old} dias encontrada")
+            else:
+                print(f"✅ Busca finalizada para '{term}' - {len(all_jobs)} vagas coletadas")
+            
             return all_jobs
             
         except Exception as e:
@@ -258,8 +370,9 @@ def main():
     """Função principal"""
     # Configurações
     remote_only = True      # False para buscar também presencial/híbrido
-    max_pages = 5           # Limite de páginas por keyword (reduzido para múltiplas buscas)
+    max_pages = 10          # Limite de páginas por keyword
     headless = True         # False para ver o browser funcionando
+    max_days_old = 3        # Máximo de dias de idade da vaga (para parar a busca)
     
     # Carrega keywords do arquivo
     keywords = load_keywords()
@@ -268,6 +381,7 @@ def main():
     print(f"Keywords encontradas: {', '.join(keywords)}")
     print(f"Apenas remotas: {remote_only}")
     print(f"Máximo de páginas por keyword: {max_pages}")
+    print(f"Parar busca se vaga for mais antiga que: {max_days_old} dias")
     print("-" * 50)
     
     scraper = GupyScraper()
@@ -282,7 +396,8 @@ def main():
                 term=keyword, 
                 remote_only=remote_only, 
                 max_pages=max_pages, 
-                headless=headless
+                headless=headless,
+                max_days_old=max_days_old
             )
             
             if jobs:
@@ -316,10 +431,16 @@ def main():
         remotas = sum(1 for job in unique_jobs if job['remoto'])
         tipos_contrato = set(job['tipoContrato'] for job in unique_jobs if job['tipoContrato'])
         
+        # Estatísticas de data
+        vagas_com_data = [job for job in unique_jobs if job['dataPublicacao']]
+        vagas_sem_data = len(unique_jobs) - len(vagas_com_data)
+        
         print(f"\n📊 Estatísticas Finais:")
         print(f"   • Total de vagas únicas: {len(unique_jobs)}")
         print(f"   • Empresas diferentes: {len(empresas)}")
         print(f"   • Vagas remotas: {remotas}")
+        print(f"   • Vagas com data: {len(vagas_com_data)}")
+        print(f"   • Vagas sem data: {vagas_sem_data}")
         print(f"   • Tipos de contrato encontrados: {', '.join(sorted(tipos_contrato)) if tipos_contrato else 'Nenhum'}")
         
         # Estatísticas por keyword
@@ -327,6 +448,12 @@ def main():
         for keyword in keywords:
             keyword_jobs = [job for job in unique_jobs if keyword.lower() in job['nome'].lower() or keyword.lower() in job.get('empresa', '').lower()]
             print(f"   • {keyword}: {len(keyword_jobs)} vagas")
+        
+        # Mostra algumas datas encontradas
+        if vagas_com_data:
+            print(f"\n📅 Exemplos de datas encontradas:")
+            for job in vagas_com_data[:3]:  # Mostra apenas as 3 primeiras
+                print(f"   • {job['nome'][:50]}... - {job['dataPublicacaoStr']}")
 
 
 if __name__ == "__main__":
