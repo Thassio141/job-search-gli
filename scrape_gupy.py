@@ -20,6 +20,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -393,14 +394,15 @@ class IndeedScraper:
                           location: str = "Brasil",
                           remote_only: bool = False,
                           start: int = 0) -> str:
-        """Monta a URL de busca de Jobs no Indeed."""
+        """Monta a URL de busca de Jobs no Indeed com filtros pré-configurados."""
         params = {
             "q": keyword,
-            "l": location,
+            "l": "Home-Office",  # Filtro de remoto
+            "fromage": "1",       # Últimas 24 horas
+            "sc": "0kf%3Aattr%28DSQF7%29%3B",  # Remote filter
+            "from": "searchOnDesktopSerp",
             "start": start
         }
-        if remote_only:
-            params["sc"] = "0kf%3Aattr%28DSQF7%29%3B"  # Remote filter
         
         query = urlencode(params, quote_via=quote_plus)
         return f"{self.BASE}{self.SEARCH_PATH}?{query}"
@@ -557,7 +559,7 @@ class IndeedScraper:
                     location: str = "Brasil",
                     remote_only: bool = False,
                     max_pages: int = 5,
-                    headless: bool = False,
+                    headless: bool = True,
                     max_days_old: int = 3) -> List[Dict]:
         """Coleta vagas do Indeed."""
         self.driver = self._setup_driver(headless=headless)
@@ -631,8 +633,8 @@ class LinkedInScraper:
       detecta 'remoto' pela localidade (ex.: 'Brazil (Remote)').
     """
 
-    BASE = "https://www.linkedin.com"
-    SEARCH_PATH = "/jobs/search/"
+    BASE = "https://br.linkedin.com"
+    SEARCH_PATH = "/jobs/search"
 
     def __init__(self,
                  chromedriver_path: str = r'C:\Users\thass\Downloads\chromedriver-win64\chromedriver.exe',
@@ -668,18 +670,20 @@ class LinkedInScraper:
 
     def _build_search_url(self,
                           keyword: str,
-                          location: str = "Brazil",
+                          location: str = "Brasil",
                           remote_only: bool = False,
                           start: int = 0) -> str:
-        """Monta a URL de busca de Jobs no LinkedIn."""
+        """Monta a URL de busca de Jobs no LinkedIn com filtros pré-configurados."""
         quoted_kw = self._ensure_quoted(keyword)
         params = {
             "keywords": quoted_kw,
             "location": location,
-            "start": start
+            "geoId": "106057199",  # ID do Brasil
+            "f_TPR": "r86400",     # Últimas 24 horas
+            "f_WT": "2",           # Remoto
+            "position": "1",
+            "pageNum": start // 25  # LinkedIn usa 25 por página
         }
-        if remote_only:
-            params["f_WT"] = "2"
         query = urlencode(params, quote_via=quote_plus)
         return f"{self.BASE}{self.SEARCH_PATH}?{query}"
 
@@ -735,57 +739,52 @@ class LinkedInScraper:
         return None
 
     @staticmethod
-    def _extract_job_info(li_html: str) -> Optional[Dict]:
-        """Extrai dados do card de vaga a partir do HTML do <li data-occludable-job-id=...>."""
-        soup = BeautifulSoup(li_html, 'html.parser')
+    def _extract_job_info(card_html: str) -> Optional[Dict]:
+        """Extrai dados do card de vaga a partir do HTML do LinkedIn."""
+        soup = BeautifulSoup(card_html, 'html.parser')
 
-        root_li = soup.find('li', attrs={'data-occludable-job-id': True}) or soup
-        job_id = root_li.get('data-occludable-job-id') or None
+        # ID da vaga
+        job_id = soup.get('data-job-id') or None
 
-        # Título + Link
-        a = soup.select_one('a.job-card-container__link')
-        if not a or not a.get('href'):
+        # Título + Link - seletores mais genéricos
+        title_link = soup.select_one('a[href*="/jobs/view/"]') or soup.select_one('a[href*="/jobs/"]')
+        if not title_link:
             return None
 
-        href = a['href']
-        link = href if href.startswith('http') else urljoin("https://www.linkedin.com", href)
-        nome = a.get('aria-label') or a.get_text(strip=True)
+        href = title_link['href']
+        link = href if href.startswith('http') else urljoin("https://br.linkedin.com", href)
+        nome = title_link.get_text(strip=True)
 
-        # Empresa
-        empresa_el = soup.select_one('.artdeco-entity-lockup__subtitle span')
+        # Empresa - seletores mais genéricos
+        empresa_el = soup.select_one('h4') or soup.select_one('.job-card-container__company-name')
         empresa = empresa_el.get_text(strip=True) if empresa_el else None
 
         # Localidade + remoto
-        loc_el = soup.select_one('.job-card-container__metadata-wrapper li span')
+        loc_el = soup.select_one('.job-card-container__metadata-item') or soup.select_one('span[title*="Brasil"]')
         localidade = loc_el.get_text(strip=True) if loc_el else None
         loc_low = (localidade or '').lower()
-        remoto = any(k in loc_low for k in ['(remote)', 'remoto', 'home office'])
+        remoto = any(k in loc_low for k in ['(remote)', 'remoto', 'home office']) or 'Brasil' in (localidade or '')
 
         # Insights (texto do card)
         insight = soup.select_one('.job-card-container__job-insight-text')
         insights = insight.get_text(strip=True) if insight else None
 
         # Promoted / Easy Apply
-        footer_text = ' '.join([li.get_text(strip=True) for li in soup.select('.job-card-container__footer-wrapper li')])
+        footer_text = ' '.join([li.get_text(strip=True) for li in soup.select('li')])
         promovida = 'promoted' in footer_text.lower()
-        easy_apply = 'easy apply' in footer_text.lower()
+        easy_apply = 'easy apply' in footer_text.lower() or 'seja um dos primeiros' in footer_text.lower()
 
-        # Data (time)
-        time_el = soup.select_one('.job-card-container__footer-wrapper time')
-        data_iso = None
+        # Data (time) - busca por texto "Há X horas"
         data_str = None
-        if time_el:
-            data_str = time_el.get_text(strip=True) or None
-            dt_attr = time_el.get('datetime')
-            if dt_attr:
-                try:
-                    data_iso = datetime.fromisoformat(dt_attr).isoformat()
-                except ValueError:
-                    pass
-            if not data_iso and data_str:
-                rel = LinkedInScraper._parse_relative_time(data_str)
+        data_iso = None
+        for el in soup.find_all(True):
+            text = el.get_text(strip=True)
+            if 'há' in text.lower() and ('hora' in text.lower() or 'minuto' in text.lower()):
+                data_str = text
+                rel = LinkedInScraper._parse_relative_time(text)
                 if rel:
                     data_iso = rel.isoformat()
+                break
 
         # Tipo de contrato (heurística no título + localidade/rodapé)
         tipo = LinkedInScraper._normalize_contract(f"{nome} {localidade} {footer_text}") or None
@@ -807,10 +806,10 @@ class LinkedInScraper:
 
     def scrape_jobs(self,
                     term: str,
-                    location: str = "Brazil",
+                    location: str = "Brasil",
                     remote_only: bool = False,
                     max_pages: int = 5,
-                    headless: bool = False,
+                    headless: bool = True,
                     max_days_old: int = 3) -> List[Dict]:
         """Coleta vagas do LinkedIn para uma 'term' (keyword) — SEMPRE usando aspas no query."""
         self.driver = self._setup_driver(headless=headless)
@@ -827,24 +826,106 @@ class LinkedInScraper:
                 print(f"🔎 Acessando: {url}")
                 self.driver.get(url)
 
+                # Primeiro, tenta fechar o modal de login se aparecer
                 try:
-                    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'li[data-occludable-job-id]')))
-                except TimeoutException:
-                    print("⏳ Timeout esperando resultados; seguindo...")
-                    continue
+                    # Aguarda um pouco para o modal aparecer
+                    time.sleep(2)
+                    
+                    # Tenta fechar o modal de login com diferentes seletores
+                    modal_close_selectors = [
+                        'button[aria-label="Fechar"]',
+                        'button[aria-label="Close"]',
+                        '.modal-close-button',
+                        '.close-button',
+                        'button[data-testid="close-button"]',
+                        'button[class*="close"]',
+                        'button[class*="dismiss"]',
+                        '[role="dialog"] button[aria-label*="Fechar"]',
+                        '[role="dialog"] button[aria-label*="Close"]',
+                        'div[role="dialog"] button:last-child',
+                        'button:contains("×")',
+                        'button:contains("✕")'
+                    ]
+                    
+                    modal_closed = False
+                    for selector in modal_close_selectors:
+                        try:
+                            close_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                            if close_button.is_displayed() and close_button.is_enabled():
+                                self.driver.execute_script("arguments[0].click();", close_button)
+                                print("✅ Modal de login fechado com sucesso")
+                                modal_closed = True
+                                time.sleep(1)
+                                break
+                        except:
+                            continue
+                    
+                    # Se não conseguiu fechar com CSS, tenta com XPath
+                    if not modal_closed:
+                        xpath_selectors = [
+                            '//button[contains(@aria-label, "Fechar")]',
+                            '//button[contains(@aria-label, "Close")]',
+                            '//button[contains(@class, "close")]',
+                            '//div[@role="dialog"]//button[last()]',
+                            '//button[text()="×"]',
+                            '//button[text()="✕"]'
+                        ]
+                        
+                        for xpath in xpath_selectors:
+                            try:
+                                close_button = self.driver.find_element(By.XPATH, xpath)
+                                if close_button.is_displayed() and close_button.is_enabled():
+                                    self.driver.execute_script("arguments[0].click();", close_button)
+                                    print("✅ Modal de login fechado com sucesso (XPath)")
+                                    modal_closed = True
+                                    time.sleep(1)
+                                    break
+                            except:
+                                continue
+                    
+                    # Se ainda não conseguiu, tenta pressionar ESC
+                    if not modal_closed:
+                        try:
+                            self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                            print("✅ Tentativa de fechar modal com ESC")
+                            time.sleep(1)
+                        except:
+                            pass
+                            
+                except Exception as e:
+                    print(f"⚠️ Erro ao tentar fechar modal: {e}")
 
-                time.sleep(1.0)
-                lis = self.driver.find_elements(By.CSS_SELECTOR, 'li[data-occludable-job-id]')
-                if not lis:
-                    print("⚠️ Nenhum card encontrado nesta página.")
-                    break
+                try:
+                    # Aguarda carregar os resultados - seletores mais genéricos
+                    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div[data-job-id], .job-card-container, [data-job-id]')))
+                except TimeoutException:
+                    print("⏳ Timeout esperando resultados; tentando seletores alternativos...")
+                    # Aguarda um pouco mais e tenta seletores mais genéricos
+                    time.sleep(3)
+                    cards = self.driver.find_elements(By.CSS_SELECTOR, 'div, article, section')
+                    if not cards:
+                        print("⚠️ Nenhum elemento encontrado nesta página.")
+                        continue
+                else:
+                    time.sleep(1.0)
+                    # Seletores mais robustos para a nova estrutura
+                    cards = self.driver.find_elements(By.CSS_SELECTOR, 'div[data-job-id]')
+                    if not cards:
+                        # Fallback para seletores alternativos
+                        cards = self.driver.find_elements(By.CSS_SELECTOR, '.job-card-container')
+                    if not cards:
+                        # Mais fallbacks
+                        cards = self.driver.find_elements(By.CSS_SELECTOR, '[data-job-id]')
+                    if not cards:
+                        print("⚠️ Nenhum card encontrado nesta página.")
+                        break
 
                 page_jobs = []
                 has_old_here = False
 
-                for li in lis:
+                for card in cards:
                     try:
-                        info = self._extract_job_info(li.get_attribute('outerHTML'))
+                        info = self._extract_job_info(card.get_attribute('outerHTML'))
                         if not info:
                             continue
 
@@ -939,7 +1020,7 @@ def scrape_from_source(source: str, keywords: List[str], **kwargs) -> List[Dict]
             try:
                 jobs = scraper.scrape_jobs(
                     term=keyword,
-                    location=kwargs.get('location', 'Brazil'),
+                    location=kwargs.get('location', 'Brasil'),
                     remote_only=kwargs.get('remote_only', True),
                     max_pages=kwargs.get('max_pages', 5),
                     headless=kwargs.get('headless', False),
@@ -1002,9 +1083,11 @@ def main():
     parser.add_argument('--max-days-old', type=int, default=3,
                        help='Máximo de dias de idade da vaga')
     parser.add_argument('--headless', action='store_true', default=True,
-                       help='Executar em modo headless')
-    parser.add_argument('--location', default='Brazil',
-                       help='Localização para LinkedIn (padrão: Brazil)')
+                       help='Executar em modo headless (padrão: True)')
+    parser.add_argument('--no-headless', action='store_true', default=False,
+                       help='Executar com interface gráfica (sobrescreve --headless)')
+    parser.add_argument('--location', default='Brasil',
+                       help='Localização para LinkedIn/Indeed (padrão: Brasil)')
     parser.add_argument('--linkedin-profile', 
                        help='Pasta do perfil do LinkedIn para manter sessão')
     parser.add_argument('--indeed-profile', 
@@ -1013,10 +1096,13 @@ def main():
     args = parser.parse_args()
     
     # Configurações
+    # Se --no-headless for usado, força headless=False
+    headless_mode = args.headless and not args.no_headless
+    
     config = {
         'remote_only': args.remote_only,
         'max_pages': args.max_pages,
-        'headless': args.headless,
+        'headless': headless_mode,
         'max_days_old': args.max_days_old,
         'location': args.location,
         'linkedin_profile_dir': args.linkedin_profile,
@@ -1032,6 +1118,7 @@ def main():
     print(f"Apenas remotas: {config['remote_only']}")
     print(f"Máximo de páginas por keyword: {config['max_pages']}")
     print(f"Parar busca se vaga for mais antiga que: {config['max_days_old']} dias")
+    print(f"Modo headless: {config['headless']} {'(Chrome oculto)' if config['headless'] else '(Chrome visível)'}")
     if args.source in ['linkedin', 'indeed', 'ambos']:
         print(f"Localização: {config['location']}")
     print("-" * 60)
@@ -1043,17 +1130,17 @@ def main():
     if args.source == 'ambos':
         print("\n🚀 Executando busca em TODAS as fontes...")
         
-        # Gupy primeiro
-        print("\n" + "="*50)
-        print("🔍 FASE 1: GUPY")
-        print("="*50)
-        gupy_jobs = scrape_from_source('gupy', keywords, **config)
-        all_jobs.extend(gupy_jobs)
-        print(f"✅ Gupy: {len(gupy_jobs)} vagas coletadas")
+        # Gupy primeiro - COMENTADO TEMPORARIAMENTE
+        # print("\n" + "="*50)
+        # print("🔍 FASE 1: GUPY")
+        # print("="*50)
+        # gupy_jobs = scrape_from_source('gupy', keywords, **config)
+        # all_jobs.extend(gupy_jobs)
+        # print(f"✅ Gupy: {len(gupy_jobs)} vagas coletadas")
         
         # LinkedIn depois
         print("\n" + "="*50)
-        print("🔍 FASE 2: LINKEDIN")
+        print("🔍 FASE 1: LINKEDIN")
         print("="*50)
         try:
             linkedin_jobs = scrape_from_source('linkedin', keywords, **config)
@@ -1066,7 +1153,7 @@ def main():
         
         # Indeed por último
         print("\n" + "="*50)
-        print("🔍 FASE 3: INDEED")
+        print("🔍 FASE 2: INDEED")
         print("="*50)
         try:
             indeed_jobs = scrape_from_source('indeed', keywords, **config)
