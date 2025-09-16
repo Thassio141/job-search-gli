@@ -460,7 +460,7 @@ def main():
     print(f"📋 Keywords: {keywords}")
     
     all_jobs: List[Dict] = []
-    scraper = LinkedInScraper(headless=False)  # visível para debug inicial
+    scraper = LinkedInScraper(headless=True)  # modo headless ativado
     
     for i, kw in enumerate(keywords, 1):
         qkw = LinkedInScraper._ensure_quoted(kw)

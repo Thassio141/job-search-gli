@@ -24,14 +24,17 @@ from selenium.webdriver.support.ui import WebDriverWait
 class GupyScraper:
     """Classe para fazer scraping de vagas da Gupy"""
     
-    def __init__(self, chromedriver_path: str = r'C:\Users\thass\Downloads\chromedriver-win64\chromedriver.exe'):
+    def __init__(self, chromedriver_path: str = r'C:\Users\thass\Downloads\chromedriver-win64\chromedriver.exe', headless: bool = False):
         self.chromedriver_path = chromedriver_path
+        self.headless = headless
         self.driver = None
         self.base_url = 'https://portal.gupy.io'
     
     def _setup_driver(self) -> webdriver.Chrome:
-        """Configura e inicializa o Chrome WebDriver (sem headless)."""
+        """Configura e inicializa o Chrome WebDriver."""
         chrome_options = Options()
+        if self.headless:
+            chrome_options.add_argument('--headless=new')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
