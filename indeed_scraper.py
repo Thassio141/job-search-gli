@@ -1,196 +1,251 @@
-#!/usr/bin/env python3
+# indeed_scraper.py
 # -*- coding: utf-8 -*-
-"""
-Scraper de vagas do Indeed (apenas Indeed), com execução standalone.
-Selectors robustos e filtros: Home-Office + Últimas 24 horas.
-"""
-
 import json
 import re
 import time
-from datetime import datetime, timedelta
+import random
+from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional
-from urllib.parse import urljoin, urlencode, quote_plus
 
 from bs4 import BeautifulSoup
+
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+
+try:
+    # opcional: ajuda a achar o driver automaticamente
+    from webdriver_manager.chrome import ChromeDriverManager
+    _USE_WDM = True
+except Exception:
+    _USE_WDM = False
+
+
+@dataclass
+class JobInfo:
+    nome: str
+    empresa: Optional[str]
+    local: Optional[str]
+    url: Optional[str]
+    resumo: Optional[str]
 
 
 class IndeedScraper:
-    BASE = "https://br.indeed.com"
-    SEARCH_PATH = "/jobs"
-
-    def __init__(self, chromedriver_path: str = r'C:\\Users\\thass\\Downloads\\chromedriver-win64\\chromedriver.exe'):
+    def __init__(
+        self,
+        chromedriver_path: str = r'C:\\Users\\thass\\Downloads\\chromedriver-win64\\chromedriver.exe',
+        headless: bool = True,
+        location: str = "Home Office",
+        site: str = "https://br.indeed.com",
+        days: Optional[int] = 1,  # fromAge em dias; None para não enviar
+        page_timeout: int = 15,
+    ):
         self.chromedriver_path = chromedriver_path
+        self.headless = headless
+        self.location = location
+        self.site = site.rstrip("/")
+        self.days = days
+        self.page_timeout = page_timeout
         self.driver: Optional[webdriver.Chrome] = None
 
+    # -------------------------
+    # Setup & helpers
+    # -------------------------
     def _setup_driver(self) -> webdriver.Chrome:
-        opts = Options()
-        opts.add_argument('--no-sandbox')
-        opts.add_argument('--disable-dev-shm-usage')
-        opts.add_argument('--disable-gpu')
-        opts.add_argument('--lang=pt-BR')
-        opts.add_argument('--accept-lang=pt-BR,pt;q=0.9,en;q=0.8')
-        service = Service(self.chromedriver_path)
+        opts = ChromeOptions()
+        # Estratégia: não esperar recursos pesados
+        opts.page_load_strategy = "eager"
+
+        if self.headless:
+            opts.add_argument("--headless=new")
+
+        # user-agent "realista"
+        opts.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+        # reduzir fingerprint
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--window-size=1366,768")
+        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+        opts.add_experimental_option("useAutomationExtension", False)
+
+        service = ChromeService(self.chromedriver_path)
         driver = webdriver.Chrome(service=service, options=opts)
-        driver.implicitly_wait(8)
+
+        # Pequeno ajuste na flag de automação
+        try:
+            driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": """
+                    Object.defineProperty(navigator, 'webdriver', {
+                      get: () => undefined
+                    });
+                    """
+                },
+            )
+        except Exception:
+            pass
+
         return driver
 
-    def _build_search_url(self, keyword: str, start: int = 0) -> str:
-        params = {
-            "q": keyword,
-            "l": "Home-Office",
-            "fromage": "1",
-            "sc": "0kf%3Aattr%28DSQF7%29%3B",
-            "from": "searchOnDesktopSerp",
-            "start": start
-        }
-        query = urlencode(params, quote_via=quote_plus)
-        return f"{self.BASE}{self.SEARCH_PATH}?{query}"
-
-    @staticmethod
-    def _normalize_contract(title_or_meta: str) -> Optional[str]:
-        if not title_or_meta:
-            return None
-        s = title_or_meta.lower()
-        if 'efetivo' in s or 'clt' in s:
-            return 'Efetivo'
-        if 'tempor' in s:
-            return 'Temporário'
-        if 'estág' in s or 'estag' in s:
-            return 'Estágio'
-        if 'aprendiz' in s:
-            return 'Aprendiz'
-        if re.search(r'\bpj\b|p\.?j\.?', s):
-            return 'PJ'
-        return None
-
-    @staticmethod
-    def _detect_seniority(title: str) -> Optional[str]:
-        if not title:
-            return None
-        t = title.lower()
-        if re.search(r'\b(sênior|senior|sr)\b', t):
-            return 'Sênior'
-        if re.search(r'\b(pleno|pl)\b', t):
-            return 'Pleno'
-        if re.search(r'\b(júnior|junior|jr)\b', t):
-            return 'Júnior'
-        return None
-
-    @staticmethod
-    def _extract_job_info(card_html: str) -> Optional[Dict]:
-        soup = BeautifulSoup(card_html, 'html.parser')
-        a = soup.select_one('h2 a.jcs-JobTitle')
-        jk = None
-        if a:
-            jk = a.get('data-jk')
-            if not jk:
-                for cls in soup.get('class', []) or []:
-                    if cls.startswith('job_'):
-                        jk = cls.split('job_')[-1]
-                        break
-        title = None
-        if a:
-            title_span = a.select_one('span')
-            title = title_span.get_text(strip=True) if title_span else a.get_text(strip=True)
-        url = None
-        if a and a.get('href'):
-            url = urljoin("https://br.indeed.com", a['href'])
-        company_el = soup.select_one('span[data-testid="company-name"]')
-        company = company_el.get_text(strip=True) if company_el else None
-        location_el = soup.select_one('div[data-testid="text-location"]')
-        location = location_el.get_text(strip=True) if location_el else None
-        remoto = False
-        if location:
-            loc_low = location.lower()
-            remoto = any(k in loc_low for k in ['remoto', 'remote', 'home office', 'trabalho remoto'])
-        bullets = [li.get_text(strip=True) for li in soup.select('div[data-testid="belowJobSnippet"] li')]
-        easy_apply = False
-        ia_icon = soup.select_one('.iaIcon')
-        if ia_icon:
-            easy_apply = 'Candidate-se facilmente' in ia_icon.get_text()
-        response_text = None
-        for el in soup.find_all(True):
-            if 'Normalmente responde' in el.get_text():
-                response_text = el.get_text(strip=True)
-                break
-        is_sponsored = False
-        if soup.get('class'):
-            is_sponsored = 'maybeSponsoredJob' in soup.get('class', [])
-        if a:
-            is_sponsored = is_sponsored or a.get('id', '').startswith('sj_') or '/pagead/clk' in (a.get('href') or '')
-        seniority = IndeedScraper._detect_seniority(title)
-        tipo_contrato = IndeedScraper._normalize_contract(f"{title} {location} {' '.join(bullets)}")
-        return {
-            'jobId': jk,
-            'link': url,
-            'nome': title,
-            'empresa': company,
-            'localidade': location,
-            'remoto': remoto,
-            'tipoContrato': tipo_contrato,
-            'seniority': seniority,
-            'bullets': bullets,
-            'easyApply': easy_apply,
-            'responseText': response_text,
-            'isSponsored': is_sponsored,
-            'dataPublicacao': None,
-            'dataPublicacaoStr': None
-        }
-
-    def scrape_jobs(self, term: str, max_pages: int = 5) -> List[Dict]:
-        self.driver = self._setup_driver()
-        results: List[Dict] = []
+    def _maybe_accept_cookies(self):
+        """Tenta aceitar o banner de cookies (se existir) para liberar a página."""
         try:
-            wait = WebDriverWait(self.driver, 20)
+            WebDriverWait(self.driver, 5).until(
+                EC.element_to_be_clickable(
+                    (
+                        By.CSS_SELECTOR,
+                        "#onetrust-accept-btn-handler, button#onetrust-accept-btn-handler, button[aria-label*='Aceitar'], button[aria-label*='Accept']",
+                    )
+                )
+            ).click()
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+    def _build_url(self, query: str, start: int) -> str:
+        # exemplo base: https://br.indeed.com/jobs?q=java&l=Home%20Office&fromage=1&start=10&sort=date
+        q = query.strip().replace(" ", "+")
+        l = self.location.strip().replace(" ", "+")
+        params = [f"q={q}", f"l={l}", "sc=0kf%3Aattr%28DSQF7%29%3B", "sort=date"]  # DSQF7 = remoto (pode variar)
+        if self.days is not None:
+            params.append(f"fromage={int(self.days)}")
+        params.append(f"start={int(start)}")
+        return f"{self.site}/jobs?{'&'.join(params)}"
+
+    # -------------------------
+    # Parsing
+    # -------------------------
+    def _extract_job_info(self, card_html: str) -> Optional[Dict]:
+        """
+        Extrai informações principais do card:
+        - nome (título)
+        - empresa
+        - local
+        - url (absoluta)
+        - resumo (trecho)
+        """
+        try:
+            soup = BeautifulSoup(card_html, "html.parser")
+
+            # título & link
+            a_title = soup.select_one("a.jcs-JobTitle")
+            nome = (a_title.get_text(strip=True) if a_title else None) or ""
+            href = a_title.get("href") if a_title else None
+            if href and href.startswith("/"):
+                url = f"{self.site}{href}"
+            else:
+                url = href
+
+            # empresa
+            empresa_el = soup.select_one('[data-testid="company-name"]')
+            empresa = empresa_el.get_text(strip=True) if empresa_el else None
+
+            # local
+            local_el = soup.select_one('[data-testid="text-location"]')
+            local = local_el.get_text(strip=True) if local_el else None
+
+            # resumo / snippet
+            resumo_el = soup.select_one('[data-testid="belowJobSnippet"]')
+            if not resumo_el:
+                # algumas páginas usam listas <ul> dentro do "sub_item"
+                resumo_el = soup.select_one("div.slider_sub_item ul, div.slider_sub_item")
+            resumo = resumo_el.get_text(" ", strip=True) if resumo_el else None
+
+            if not nome:
+                return None
+
+            return asdict(JobInfo(nome=nome, empresa=empresa, local=local, url=url, resumo=resumo))
+        except Exception:
+            return None
+
+    # -------------------------
+    # Scraping principal
+    # -------------------------
+    def scrape_jobs(
+        self,
+        term: str,
+        max_pages: int = 5,
+        senior_filter: bool = True,
+        sleep_between_pages: Optional[tuple] = (0.6, 1.4),
+    ) -> List[Dict]:
+        self.driver = self._setup_driver()
+        wait = WebDriverWait(self.driver, self.page_timeout)
+        all_jobs: List[Dict] = []
+
+        try:
             for page in range(max_pages):
-                start = page * 10
-                url = self._build_search_url(term, start=start)
-                print(f"🔎 Acessando: {url}")
+                start = page * 10  # indeed pagina em múltiplos de 10
+                url = self._build_url(term, start=start)
+                print(f"➡️  Carregando página {page+1}/{max_pages}: {url}")
                 self.driver.get(url)
+
+                # cookies (se aparecer)
+                self._maybe_accept_cookies()
+
+                # aguarde por um seletor estável
                 try:
-                    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '#mosaic-provider-jobcards .cardOutline.tapItem.result')))
+                    wait.until(
+                        EC.presence_of_all_elements_located(
+                            (By.CSS_SELECTOR, "a.jcs-JobTitle")
+                        )
+                    )
                 except TimeoutException:
-                    print("⏳ Timeout esperando resultados; seguindo...")
+                    print("⏳ Timeout esperando títulos de vagas; seguindo para próxima página…")
+                    # Tenta continuar pra próxima página
                     continue
-                time.sleep(1.0)
-                cards = self.driver.find_elements(By.CSS_SELECTOR, '#mosaic-provider-jobcards .cardOutline.tapItem.result')
+
+                # aguarde um pouco para o DOM estabilizar
+                time.sleep(0.8)
+
+                # colete cards de maneira robusta
+                cards = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "div.cardOutline.tapItem, div.cardOutline.tapItem.result",
+                )
+
                 if not cards:
-                    print("⚠️ Nenhum card encontrado nesta página.")
+                    print("🛑 Nenhuma vaga encontrada; encerrando a paginação.")
                     break
-                page_jobs = []
-                for card in cards:
+
+                print(f"🔎 Encontrados {len(cards)} cards na página {page+1}.")
+
+                page_jobs: List[Dict] = []
+                for idx, card in enumerate(cards, start=1):
                     try:
-                        info = self._extract_job_info(card.get_attribute('outerHTML'))
-                        if info:
-                            # Filtro: excluir vagas Senior/SR
-                            nome = (info.get('title') or '').lower()
-                            if 'senior' in nome or 'sr' in nome:
-                                print(f"🚫 Vaga Senior/SR filtrada: {info.get('title', 'N/A')}")
+                        outer_html = card.get_attribute("outerHTML")
+                        info = self._extract_job_info(outer_html)
+                        if not info:
+                            continue
+
+                        # filtro de senioridade usando a chave correta "nome"
+                        if senior_filter:
+                            nome_lower = (info.get("nome") or "").lower()
+                            if re.search(r"\b(senior|sênior|sr)\b", nome_lower):
+                                print(f"🚫 (Filtro SR) Ignorando vaga: {info.get('nome', 'N/A')}")
                                 continue
-                            page_jobs.append(info)
-                    except Exception as e:
-                        print(f"Erro ao processar card: {e}")
+
+                        page_jobs.append(info)
+                    except Exception:
                         continue
-                results.extend(page_jobs)
-                print(f"✅ Página {page+1}: coletadas {len(page_jobs)} vagas.")
-                # próxima página disponível?
-                try:
-                    next_button = self.driver.find_element(By.CSS_SELECTOR, 'nav[aria-label="pagination"] a[data-testid="pagination-page-next"][href]')
-                    if not next_button.is_enabled():
-                        print("🛑 Não há mais páginas disponíveis.")
-                        break
-                except NoSuchElementException:
-                    print("🛑 Não há mais páginas disponíveis.")
-                    break
-            return results
+
+                print(f"✅ Vagas válidas nesta página: {len(page_jobs)}")
+                all_jobs.extend(page_jobs)
+
+                # pausa randômica entre páginas (reduz bloqueios)
+                if sleep_between_pages:
+                    time.sleep(random.uniform(*sleep_between_pages))
+
+            return all_jobs
         finally:
             if self.driver:
                 self.driver.quit()
@@ -208,7 +263,7 @@ def load_keywords(filename: str = 'keywords.json') -> List[str]:
 def deduplicate_jobs(jobs: List[Dict]) -> List[Dict]:
     seen, out = set(), []
     for job in jobs:
-        key = job.get('link') or job.get('jobId')
+        key = job.get('url') or job.get('nome')
         if key and key not in seen:
             seen.add(key)
             out.append(job)
@@ -219,11 +274,13 @@ def main():
     keywords = load_keywords('keywords.json')
     print("🚀 Indeed: iniciando scraping...")
     all_jobs: List[Dict] = []
-    scraper = IndeedScraper()
+    scraper = IndeedScraper(headless=True)
+    
     for i, kw in enumerate(keywords, 1):
         print(f"\n🔍 ({i}/{len(keywords)}) '{kw}'...")
         jobs = scraper.scrape_jobs(term=kw, max_pages=5)
         all_jobs.extend(jobs)
+    
     unique_jobs = deduplicate_jobs(all_jobs)
     with open('vagas_indeed.json', 'w', encoding='utf-8') as f:
         json.dump(unique_jobs, f, ensure_ascii=False, indent=2)
@@ -232,6 +289,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
