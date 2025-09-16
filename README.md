@@ -24,6 +24,7 @@ O sistema coleta vagas baseadas em keywords personalizáveis, filtra por critér
 ### 🎯 Filtros Aplicados
 - ✅ **Vagas remotas** apenas
 - ✅ **Últimos 3 dias** de publicação
+- ✅ **Exclusão de vagas Senior/SR** no título
 - ✅ **Deduplicação** por link/ID único
 - ✅ **Scroll infinito** (LinkedIn) para máxima cobertura
 
@@ -156,6 +157,18 @@ scraper.scrape_jobs(
 - **dataPublicacao**: Data em formato ISO
 - **dataPublicacaoStr**: Data em formato relativo ("Há 2 horas")
 
+### 🚫 Filtro Senior/SR
+O sistema automaticamente **exclui** vagas que contenham as palavras "Senior" ou "SR" no título:
+- ✅ **Filtrado**: "Senior Java Developer", "SR Backend Engineer"
+- ✅ **Filtrado**: "Desenvolvedor Senior", "Engenheiro SR"
+- ✅ **Mantido**: "Java Developer", "Backend Engineer", "Desenvolvedor Pleno"
+
+**Log de filtragem**:
+```
+🚫 Vaga Senior/SR filtrada: Senior Java Developer
+🚫 Vaga Senior/SR filtrada: SR Desenvolvimento Back-end Java
+```
+
 ## 🔧 Uso Avançado
 
 ### Execução Individual por Plataforma
@@ -229,15 +242,22 @@ wait = WebDriverWait(self.driver, 30)  # Era 20
 ## 📈 Estatísticas de Performance
 
 ### Teste Realizado
-- **Keywords**: 4 (java, react, fullstack, kotlin)
-- **Tempo total**: ~5 minutos
-- **Vagas coletadas**: 163 únicas
+- **Keywords**: 3 (java, react, fullstack)
+- **Tempo total**: ~3 minutos
+- **Vagas coletadas**: 110 únicas (após filtro Senior/SR)
+- **Vagas filtradas**: 30+ vagas Senior/SR excluídas
 - **Taxa de sucesso**: 100%
 
 ### Breakdown por Plataforma
-- **LinkedIn**: 60 vagas (java) + 60 vagas (react) + 23 vagas (fullstack) + 20 vagas (kotlin)
+- **LinkedIn**: 44 vagas (java) + 46 vagas (react) + 20 vagas (fullstack)
 - **Gupy**: Varia conforme disponibilidade
 - **Indeed**: Varia conforme disponibilidade
+
+### Eficácia do Filtro Senior/SR
+- **Java**: 16 vagas Senior/SR filtradas de 60 total
+- **React**: 14 vagas Senior/SR filtradas de 60 total  
+- **Fullstack**: 4 vagas Senior/SR filtradas de 24 total
+- **Total filtrado**: 34+ vagas Senior/SR excluídas automaticamente
 
 ## 🔒 Considerações Legais
 

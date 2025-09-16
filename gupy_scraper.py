@@ -213,6 +213,12 @@ class GupyScraper:
                     try:
                         job_info = self._extract_job_info(card.get_attribute('outerHTML'), self.base_url)
                         if job_info and job_info['link']:
+                            # Filtro: excluir vagas Senior/SR
+                            nome = (job_info.get('nome') or '').lower()
+                            if 'senior' in nome or 'sr' in nome:
+                                print(f"🚫 Vaga Senior/SR filtrada: {job_info.get('nome', 'N/A')}")
+                                continue
+                            
                             if job_info['dataPublicacao']:
                                 job_date = datetime.fromisoformat(job_info['dataPublicacao'])
                                 if job_date < cutoff_date:

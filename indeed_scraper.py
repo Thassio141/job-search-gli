@@ -170,6 +170,11 @@ class IndeedScraper:
                     try:
                         info = self._extract_job_info(card.get_attribute('outerHTML'))
                         if info:
+                            # Filtro: excluir vagas Senior/SR
+                            nome = (info.get('title') or '').lower()
+                            if 'senior' in nome or 'sr' in nome:
+                                print(f"🚫 Vaga Senior/SR filtrada: {info.get('title', 'N/A')}")
+                                continue
                             page_jobs.append(info)
                     except Exception as e:
                         print(f"Erro ao processar card: {e}")

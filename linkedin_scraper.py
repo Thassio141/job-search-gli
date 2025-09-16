@@ -351,6 +351,11 @@ class LinkedInScraper:
                     info = self._extract_job_info(str(li))
                     if not info:
                         continue
+                    # Filtro: excluir vagas Senior/SR
+                    nome = (info.get('nome') or '').lower()
+                    if 'senior' in nome or 'sr' in nome:
+                        print(f"🚫 Vaga Senior/SR filtrada: {info.get('nome', 'N/A')}")
+                        continue
                     if info.get('dataPublicacao'):
                         try:
                             dt = datetime.fromisoformat(info['dataPublicacao'])
@@ -368,6 +373,11 @@ class LinkedInScraper:
             try:
                 info = self._extract_job_info(card.get_attribute('outerHTML'))
                 if not info:
+                    continue
+                # Filtro: excluir vagas Senior/SR
+                nome = (info.get('nome') or '').lower()
+                if 'senior' in nome or 'sr' in nome:
+                    print(f"🚫 Vaga Senior/SR filtrada: {info.get('nome', 'N/A')}")
                     continue
                 if info.get('dataPublicacao'):
                     try:
