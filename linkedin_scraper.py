@@ -382,40 +382,42 @@ class LinkedInScraper:
 
         return results
 
-    def scrape_jobs(self, term: str, location: str = "Brasil", max_pages: int = 5, max_days_old: int = 3) -> List[Dict]:
+    def scrape_jobs(self, term: str, location: str = "Brasil", max_scrolls: int = 50, max_days_old: int = 3) -> List[Dict]:
         self.driver = self._setup_driver()
         results: List[Dict] = []
         try:
             cutoff_date = datetime.now() - timedelta(days=max_days_old)
+            
+            # URL única sem paginação - LinkedIn usa scroll infinito
+            url = self._build_search_url(term, location=location, start=0)
+            print(f"\n🔎 Acessando: {url}")
+            self.driver.get(url)
 
-            for page in range(max_pages):
-                start = page * 25
-                url = self._build_search_url(term, location=location, start=start)
-                print(f"\n🔎 Acessando: {url}")
-                self.driver.get(url)
+            # mata modal/banner e garante que não caiu em /legal/*
+            self._dismiss_login_overlays()
+            self._ensure_not_on_legal(url)
 
-                # mata modal/banner e garante que não caiu em /legal/*
+            ul = self._wait_for_results_list(timeout=18)
+            if not ul:
+                print("⚠️ Não encontrei a lista de resultados. Tentando novamente...")
+                time.sleep(3)
                 self._dismiss_login_overlays()
-                self._ensure_not_on_legal(url)
-
-                ul = self._wait_for_results_list(timeout=18)
+                ul = self._wait_for_results_list(timeout=15)
                 if not ul:
-                    print("⚠️ Não encontrei a lista de resultados nesta página. Próxima…")
-                    continue
+                    print("❌ Falha ao carregar lista de resultados.")
+                    return results
 
-                total = self._progressive_scroll_results(max_scrolls=24, pause=0.35)
-                print(f"✅ Lista visível com {total} cards (após scroll)")
+            print("📜 Iniciando scroll infinito para carregar mais vagas...")
+            total_cards = self._progressive_scroll_results(max_scrolls=max_scrolls, pause=0.4)
+            print(f"✅ Scroll completo: {total_cards} cards carregados")
 
-                self._dismiss_login_overlays()
-                self._ensure_not_on_legal(url)
-
-                page_jobs = self._collect_cards_current_page(cutoff_date)
-                print(f"🧾 Página {page+1}: {len(page_jobs)} vagas válidas coletadas.")
-                results.extend(page_jobs)
-
-                if total == 0 and len(page_jobs) == 0:
-                    print("🛑 Zero cards coletados; interrompendo paginação para evitar loops.")
-                    break
+            # Coleta todas as vagas da página (após scroll)
+            self._dismiss_login_overlays()
+            self._ensure_not_on_legal(url)
+            
+            all_jobs = self._collect_cards_current_page(cutoff_date)
+            print(f"🧾 Total coletado: {len(all_jobs)} vagas válidas")
+            results.extend(all_jobs)
 
             return results
         finally:
@@ -444,18 +446,32 @@ def deduplicate_jobs(jobs: List[Dict]) -> List[Dict]:
 
 def main():
     keywords = load_keywords('keywords.json')
-    print("🚀 LinkedIn: iniciando scraping...")
+    print(f"🚀 LinkedIn: iniciando scraping com {len(keywords)} keywords...")
+    print(f"📋 Keywords: {keywords}")
+    
     all_jobs: List[Dict] = []
-    scraper = LinkedInScraper()
+    scraper = LinkedInScraper(headless=False)  # visível para debug inicial
+    
     for i, kw in enumerate(keywords, 1):
         qkw = LinkedInScraper._ensure_quoted(kw)
-        print(f"\n🔍 ({i}/{len(keywords)}) {qkw}...")
-        jobs = scraper.scrape_jobs(term=kw, location='Brasil', max_pages=5, max_days_old=3)
+        print(f"\n🔍 ({i}/{len(keywords)}) Buscando por: {qkw}")
+        jobs = scraper.scrape_jobs(term=kw, location='Brasil', max_scrolls=50, max_days_old=3)
+        print(f"✅ Encontradas {len(jobs)} vagas para '{kw}'")
         all_jobs.extend(jobs)
+    
+    # Deduplicação e salvamento
     unique_jobs = deduplicate_jobs(all_jobs)
-    with open('vagas_linkedin.json', 'w', encoding='utf-8') as f:
+    print(f"\n📊 Resumo:")
+    print(f"   • Total coletado: {len(all_jobs)} vagas")
+    print(f"   • Após deduplicação: {len(unique_jobs)} vagas únicas")
+    
+    # Salva em JSON
+    output_file = 'vagas_linkedin.json'
+    with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(unique_jobs, f, ensure_ascii=False, indent=2)
-    print(f"\n✅ LinkedIn: {len(unique_jobs)} vagas únicas salvas em vagas_linkedin.json")
+    
+    print(f"💾 Salvo em: {output_file}")
+    print(f"✅ LinkedIn scraping concluído!")
 
 
 if __name__ == '__main__':
