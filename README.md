@@ -1,6 +1,6 @@
-# 🤖 WhatsApp Bot - Scraper de Vagas
+# 🤖 Bot de Vagas - Scraper Automatizado
 
-Um sistema automatizado de scraping de vagas de emprego que coleta oportunidades de trabalho de múltiplas plataformas e envia os resultados via WhatsApp.
+Um sistema automatizado de scraping de vagas de emprego que coleta oportunidades de trabalho de múltiplas plataformas e envia os resultados via **Discord** ou **WhatsApp**.
 
 ## 📋 Visão Geral
 
@@ -18,8 +18,10 @@ O sistema coleta vagas baseadas em keywords personalizáveis, filtra por critér
 - **Keywords personalizáveis**: Configure suas próprias palavras-chave de busca
 - **Filtros inteligentes**: Vagas remotas e publicadas nos últimos 3 dias
 - **Deduplicação**: Remove vagas duplicadas entre plataformas
-- **Integração WhatsApp**: Envio automático para grupos do WhatsApp
+- **🤖 Bot Discord**: Envio automático para canais do Discord com agendamento
+- **📱 Integração WhatsApp**: Envio automático para grupos do WhatsApp
 - **Modo headless**: Execução silenciosa em background
+- **⏰ Agendamento**: Execução automática a cada hora (configurável)
 
 ### 🎯 Filtros Aplicados
 - ✅ **Vagas remotas** apenas
@@ -35,13 +37,59 @@ whatsapp-bot/
 ├── README.md                 # Documentação do projeto
 ├── requirements.txt          # Dependências Python
 ├── keywords.json            # Lista de palavras-chave para busca
-├── gupy_scraper.py         # Scraper específico para Gupy
-├── linkedin_scraper.py     # Scraper específico para LinkedIn  
-├── indeed_scraper.py       # Scraper específico para Indeed
-├── vagas_gupy.json         # Vagas coletadas do Gupy (gerado)
-├── vagas_linkedin.json     # Vagas coletadas do LinkedIn (gerado)
-└── vagas_indeed.json       # Vagas coletadas do Indeed (gerado)
+├── config.json              # Configurações do bot Discord
+├── discord_bot.py           # Bot do Discord principal
+├── start_bot.py             # Script de inicialização do bot
+├── test_bot.py              # Script de teste do bot
+├── gupy_scraper.py          # Scraper específico para Gupy
+├── linkedin_scraper.py      # Scraper específico para LinkedIn  
+├── indeed_scraper.py        # Scraper específico para Indeed
+├── main_scraper.py          # Orquestrador principal
+├── vagas_*.json             # Vagas coletadas (gerados)
+└── vagas_enviadas.json      # Controle de vagas enviadas (gerado)
 ```
+
+## 🤖 Bot do Discord (NOVO!)
+
+### 🚀 Início Rápido
+
+1. **Configure o bot**:
+   ```bash
+   # Copie o arquivo de exemplo
+   cp config_exemplo.json config.json
+   
+   # Edite com suas configurações
+   # - Token do Discord
+   # - ID do canal
+   ```
+
+2. **Execute o bot**:
+   ```bash
+   python start_bot.py
+   ```
+
+### 📋 Funcionalidades do Bot
+
+- ✅ **Agendamento automático**: Executa scraping a cada hora
+- ✅ **Controle de duplicatas**: Não envia a mesma vaga duas vezes
+- ✅ **Embeds bonitos**: Vagas formatadas com cores e informações
+- ✅ **Execução imediata**: Inicia scraping assim que conecta
+- ✅ **Persistência**: Mantém histórico mesmo após reinicialização
+
+### ⚙️ Configuração do Discord
+
+1. **Crie um bot** no [Discord Developer Portal](https://discord.com/developers/applications)
+2. **Configure permissões**: Send Messages, Embed Links, Read Message History
+3. **Obtenha o token** e **ID do canal**
+4. **Edite config.json** com suas credenciais
+
+### ⚡ Funcionamento Automático
+
+- **Início imediato**: Executa scraping assim que conecta ao Discord
+- **Agendamento**: Repete a cada hora automaticamente
+- **Silencioso**: Funciona em background sem comandos
+
+Para mais detalhes, consulte [INSTRUCOES_DISCORD_BOT.md](INSTRUCOES_DISCORD_BOT.md)
 
 ## 🛠️ Instalação
 
@@ -49,6 +97,7 @@ whatsapp-bot/
 - Python 3.8+
 - Google Chrome instalado
 - ChromeDriver (gerenciado automaticamente)
+- **Para Discord Bot**: Conta Discord + Servidor com permissões de bot
 
 ### Passo a Passo
 
@@ -75,12 +124,22 @@ Edite o arquivo `keywords.json` com suas palavras-chave:
 ]
 ```
 
-4. **Execute o scraper**
+4. **Teste a instalação**
+```bash
+# Teste todas as dependências e configurações
+python test_bot.py
+```
+
+5. **Execute o bot Discord (Recomendado)**
+```bash
+# Configure config.json primeiro, depois:
+python start_bot.py
+```
+
+6. **Ou execute scrapers individuais**
 ```bash
 # Executar todos os scrapers
-python gupy_scraper.py
-python linkedin_scraper.py  
-python indeed_scraper.py
+python main_scraper.py
 
 # Ou executar individualmente
 python linkedin_scraper.py
