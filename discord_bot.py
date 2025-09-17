@@ -98,8 +98,8 @@ class VagasBot(commands.Bot):
             print(f"❌ Erro ao salvar vagas enviadas: {e}")
     
     def create_job_id(self, job: Dict) -> str:
-        """Cria um ID único para a vaga baseado em título, empresa e plataforma."""
-        title = job.get('titulo', '').lower().strip()
+        """Cria um ID único para a vaga baseado em nome, empresa e plataforma."""
+        title = job.get('nome', '').lower().strip()
         company = job.get('empresa', '').lower().strip()
         platform = job.get('plataforma', '').lower().strip()
         return f"{platform}_{company}_{title}".replace(' ', '_')
@@ -107,7 +107,7 @@ class VagasBot(commands.Bot):
     def format_job_embed(self, job: Dict) -> discord.Embed:
         """Formata uma vaga como embed do Discord."""
         embed = discord.Embed(
-            title=f"💼 {job.get('titulo', 'Vaga sem título')}",
+            title=f"💼 {job.get('nome', 'Vaga sem título')}",
             color=0x00ff00 if job.get('plataforma') == 'gupy' else 
                   0x0066cc if job.get('plataforma') == 'indeed' else 0x0077b5,
             timestamp=datetime.now()
@@ -117,11 +117,11 @@ class VagasBot(commands.Bot):
         if job.get('empresa'):
             embed.add_field(name="🏢 Empresa", value=job['empresa'], inline=True)
         
-        if job.get('localizacao'):
-            embed.add_field(name="📍 Localização", value=job['localizacao'], inline=True)
+        if job.get('localidade'):
+            embed.add_field(name="📍 Localização", value=job['localidade'], inline=True)
         
-        if job.get('tipo_contrato'):
-            embed.add_field(name="📋 Tipo", value=job['tipo_contrato'], inline=True)
+        if job.get('tipoContrato'):
+            embed.add_field(name="📋 Tipo", value=job['tipoContrato'], inline=True)
         
         if job.get('salario'):
             embed.add_field(name="💰 Salário", value=job['salario'], inline=True)
@@ -129,8 +129,8 @@ class VagasBot(commands.Bot):
         if job.get('plataforma'):
             embed.add_field(name="🌐 Plataforma", value=job['plataforma'].upper(), inline=True)
         
-        if job.get('data_publicacao'):
-            embed.add_field(name="📅 Publicado", value=job['data_publicacao'], inline=True)
+        if job.get('dataPublicacaoStr'):
+            embed.add_field(name="📅 Publicado", value=job['dataPublicacaoStr'], inline=True)
         
         # Descrição (limitada)
         if job.get('descricao'):
