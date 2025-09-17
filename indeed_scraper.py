@@ -4,8 +4,10 @@ import json
 import re
 import time
 import random
+import os
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -23,6 +25,54 @@ try:
     _USE_WDM = True
 except Exception:
     _USE_WDM = False
+
+
+# -------------------------
+# Utilidades de salvamento
+# -------------------------
+def _atomic_write_json(path: str, data) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)  # gravação atômica
+
+def _normalize_url(u: Optional[str]) -> Optional[str]:
+    if not u:
+        return None
+    # Para URLs do Indeed com jk, manter o parâmetro jk para deduplicação
+    if "indeed.com/viewjob" in u and "jk=" in u:
+        return u  # Manter URL completa para Indeed
+    # Para outras URLs, remover query/fragment para dedup
+    parts = urlsplit(u)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+def _deduplicate_jobs(jobs: List[Dict]) -> List[Dict]:
+    seen, out = set(), []
+    for j in jobs:
+        url_norm = _normalize_url(j.get("url"))
+        
+        # Se a URL é um redirecionamento genérico do Indeed, usar nome+empresa como chave
+        if url_norm and "indeed.com/rc/clk" in url_norm:
+            key = f"name:{(j.get('nome') or '').strip().lower()}|" \
+                  f"{(j.get('empresa') or '').strip().lower()}"
+        elif url_norm and "indeed.com/viewjob" in url_norm:
+            # Para URLs específicas do Indeed, usar a URL como chave
+            key = f"url:{url_norm}"
+        elif url_norm:
+            key = f"url:{url_norm}"
+        else:
+            # fallback estável
+            key = f"name:{(j.get('nome') or '').strip().lower()}|" \
+                  f"{(j.get('empresa') or '').strip().lower()}|" \
+                  f"{(j.get('local') or '').strip().lower()}"
+        
+        if key not in seen:
+            seen.add(key)
+            # se normalizou URL, reflita no objeto salvo
+            if url_norm:
+                j = {**j, "url": url_norm}
+            out.append(j)
+    return out
 
 
 @dataclass
@@ -57,19 +107,14 @@ class IndeedScraper:
     # -------------------------
     def _setup_driver(self) -> webdriver.Chrome:
         opts = ChromeOptions()
-        # Estratégia: não esperar recursos pesados
         opts.page_load_strategy = "eager"
-
         if self.headless:
             opts.add_argument("--headless=new")
-
-        # user-agent "realista"
         opts.add_argument(
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         )
-        # reduzir fingerprint
         opts.add_argument("--disable-blink-features=AutomationControlled")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
@@ -78,9 +123,9 @@ class IndeedScraper:
         opts.add_experimental_option("useAutomationExtension", False)
 
         service = ChromeService(self.chromedriver_path)
+
         driver = webdriver.Chrome(service=service, options=opts)
 
-        # Pequeno ajuste na flag de automação
         try:
             driver.execute_cdp_cmd(
                 "Page.addScriptToEvaluateOnNewDocument",
@@ -98,13 +143,13 @@ class IndeedScraper:
         return driver
 
     def _maybe_accept_cookies(self):
-        """Tenta aceitar o banner de cookies (se existir) para liberar a página."""
         try:
             WebDriverWait(self.driver, 5).until(
                 EC.element_to_be_clickable(
                     (
                         By.CSS_SELECTOR,
-                        "#onetrust-accept-btn-handler, button#onetrust-accept-btn-handler, button[aria-label*='Aceitar'], button[aria-label*='Accept']",
+                        "#onetrust-accept-btn-handler, button#onetrust-accept-btn-handler, "
+                        "button[aria-label*='Aceitar'], button[aria-label*='Accept']",
                     )
                 )
             ).click()
@@ -113,10 +158,11 @@ class IndeedScraper:
             pass
 
     def _build_url(self, query: str, start: int) -> str:
-        # exemplo base: https://br.indeed.com/jobs?q=java&l=Home%20Office&fromage=1&start=10&sort=date
+        # exemplo: https://br.indeed.com/jobs?q=java&l=Home%20Office&fromage=1&start=10&sort=date
         q = query.strip().replace(" ", "+")
         l = self.location.strip().replace(" ", "+")
-        params = [f"q={q}", f"l={l}", "sc=0kf%3Aattr%28DSQF7%29%3B", "sort=date"]  # DSQF7 = remoto (pode variar)
+        params = [f"q={q}", f"l={l}", "sort=date"]
+        # ⚠️ A flag de remoto no Indeed muda bastante; deixe sem forçar sc=... por robustez.
         if self.days is not None:
             params.append(f"fromage={int(self.days)}")
         params.append(f"start={int(start)}")
@@ -126,38 +172,36 @@ class IndeedScraper:
     # Parsing
     # -------------------------
     def _extract_job_info(self, card_html: str) -> Optional[Dict]:
-        """
-        Extrai informações principais do card:
-        - nome (título)
-        - empresa
-        - local
-        - url (absoluta)
-        - resumo (trecho)
-        """
         try:
             soup = BeautifulSoup(card_html, "html.parser")
 
-            # título & link
             a_title = soup.select_one("a.jcs-JobTitle")
             nome = (a_title.get_text(strip=True) if a_title else None) or ""
-            href = a_title.get("href") if a_title else None
-            if href and href.startswith("/"):
-                url = f"{self.site}{href}"
-            else:
-                url = href
+            
+            # Extrair URL correta usando data-jk ou href
+            url = None
+            if a_title:
+                # Primeiro, tentar extrair data-jk para construir URL específica
+                data_jk = a_title.get("data-jk")
+                if data_jk:
+                    url = f"{self.site}/viewjob?jk={data_jk}"
+                else:
+                    # Fallback para href original
+                    href = a_title.get("href")
+                    if href:
+                        if href.startswith("/"):
+                            url = f"{self.site}{href}"
+                        else:
+                            url = href
 
-            # empresa
             empresa_el = soup.select_one('[data-testid="company-name"]')
             empresa = empresa_el.get_text(strip=True) if empresa_el else None
 
-            # local
             local_el = soup.select_one('[data-testid="text-location"]')
             local = local_el.get_text(strip=True) if local_el else None
 
-            # resumo / snippet
             resumo_el = soup.select_one('[data-testid="belowJobSnippet"]')
             if not resumo_el:
-                # algumas páginas usam listas <ul> dentro do "sub_item"
                 resumo_el = soup.select_one("div.slider_sub_item ul, div.slider_sub_item")
             resumo = resumo_el.get_text(" ", strip=True) if resumo_el else None
 
@@ -177,6 +221,8 @@ class IndeedScraper:
         max_pages: int = 5,
         senior_filter: bool = True,
         sleep_between_pages: Optional[tuple] = (0.6, 1.4),
+        # NEW: callback de progresso p/ salvar incrementalmente
+        progress_callback: Optional[Callable[[List[Dict], Dict], None]] = None,
     ) -> List[Dict]:
         self.driver = self._setup_driver()
         wait = WebDriverWait(self.driver, self.page_timeout)
@@ -189,25 +235,19 @@ class IndeedScraper:
                 print(f"➡️  Carregando página {page+1}/{max_pages}: {url}")
                 self.driver.get(url)
 
-                # cookies (se aparecer)
                 self._maybe_accept_cookies()
 
-                # aguarde por um seletor estável
                 try:
-                    wait.until(
-                        EC.presence_of_all_elements_located(
-                            (By.CSS_SELECTOR, "a.jcs-JobTitle")
-                        )
-                    )
+                    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.jcs-JobTitle")))
                 except TimeoutException:
                     print("⏳ Timeout esperando títulos de vagas; seguindo para próxima página…")
-                    # Tenta continuar pra próxima página
+                    # checkpoint mesmo assim
+                    if progress_callback:
+                        progress_callback(all_jobs, {"term": term, "page": page + 1, "url": url})
                     continue
 
-                # aguarde um pouco para o DOM estabilizar
                 time.sleep(0.8)
 
-                # colete cards de maneira robusta
                 cards = self.driver.find_elements(
                     By.CSS_SELECTOR,
                     "div.cardOutline.tapItem, div.cardOutline.tapItem.result",
@@ -215,6 +255,9 @@ class IndeedScraper:
 
                 if not cards:
                     print("🛑 Nenhuma vaga encontrada; encerrando a paginação.")
+                    # checkpoint final desta keyword
+                    if progress_callback:
+                        progress_callback(all_jobs, {"term": term, "page": page + 1, "url": url})
                     break
 
                 print(f"🔎 Encontrados {len(cards)} cards na página {page+1}.")
@@ -227,7 +270,6 @@ class IndeedScraper:
                         if not info:
                             continue
 
-                        # filtro de senioridade usando a chave correta "nome"
                         if senior_filter:
                             nome_lower = (info.get("nome") or "").lower()
                             if re.search(r"\b(senior|sênior|sr)\b", nome_lower):
@@ -241,7 +283,10 @@ class IndeedScraper:
                 print(f"✅ Vagas válidas nesta página: {len(page_jobs)}")
                 all_jobs.extend(page_jobs)
 
-                # pausa randômica entre páginas (reduz bloqueios)
+                # checkpoint após cada página (removido para evitar problemas)
+                # if progress_callback:
+                #     progress_callback(all_jobs, {"term": term, "page": page + 1, "url": url})
+
                 if sleep_between_pages:
                     time.sleep(random.uniform(*sleep_between_pages))
 
@@ -251,6 +296,9 @@ class IndeedScraper:
                 self.driver.quit()
 
 
+# -------------------------
+# Execução
+# -------------------------
 def load_keywords(filename: str = 'keywords.json') -> List[str]:
     try:
         with open(filename, 'r', encoding='utf-8') as f:
@@ -260,32 +308,50 @@ def load_keywords(filename: str = 'keywords.json') -> List[str]:
         return ['vagas']
 
 
-def deduplicate_jobs(jobs: List[Dict]) -> List[Dict]:
-    seen, out = set(), []
-    for job in jobs:
-        key = job.get('url') or job.get('nome')
-        if key and key not in seen:
-            seen.add(key)
-            out.append(job)
-    return out
-
-
 def main():
+    OUTFILE = 'vagas_indeed.json'
+    all_jobs: List[Dict] = []
     keywords = load_keywords('keywords.json')
     print("🚀 Indeed: iniciando scraping...")
-    all_jobs: List[Dict] = []
+
+    def on_progress(current_jobs: List[Dict], ctx: Dict):
+        """
+        Salva incrementalmente de forma ATÔMICA a cada página/keyword.
+        """
+        # Usar all_jobs em vez de current_jobs para salvar todas as vagas acumuladas
+        uniq = _deduplicate_jobs(all_jobs)
+        _atomic_write_json(OUTFILE, uniq)
+        print(f"💾 Checkpoint salvo ({len(uniq)} vagas) "
+              f"[term='{ctx.get('term')}', page={ctx.get('page')}]")
+
     scraper = IndeedScraper(headless=True)
-    
-    for i, kw in enumerate(keywords, 1):
-        print(f"\n🔍 ({i}/{len(keywords)}) '{kw}'...")
-        jobs = scraper.scrape_jobs(term=kw, max_pages=5)
-        all_jobs.extend(jobs)
-    
-    unique_jobs = deduplicate_jobs(all_jobs)
-    with open('vagas_indeed.json', 'w', encoding='utf-8') as f:
-        json.dump(unique_jobs, f, ensure_ascii=False, indent=2)
-    print(f"\n✅ Indeed: {len(unique_jobs)} vagas únicas salvas em vagas_indeed.json")
+
+    try:
+        for i, kw in enumerate(keywords, 1):
+            print(f"\n🔍 ({i}/{len(keywords)}) '{kw}'...")
+            jobs = scraper.scrape_jobs(
+                term=kw,
+                max_pages=5,
+                senior_filter=True,
+                progress_callback=None,  # Não usar callback interno
+            )
+            all_jobs.extend(jobs)
+            print(f"✅ {kw}: {len(jobs)} vagas encontradas, total acumulado: {len(all_jobs)}")
+    except KeyboardInterrupt:
+        print("\n🛑 Interrompido pelo usuário (Ctrl+C). Salvando progresso...")
+    except Exception as e:
+        print(f"\n⚠️ Erro inesperado: {e}. Salvando progresso parcial...")
+    finally:
+        unique_jobs = _deduplicate_jobs(all_jobs)
+        _atomic_write_json(OUTFILE, unique_jobs)
+        print(f"\n✅ Indeed: {len(unique_jobs)} vagas únicas salvas em {OUTFILE}")
 
 
 if __name__ == '__main__':
     main()
+
+# --- (Opcional) Se quiser NDJSON incremental (append) ---
+# def append_ndjson(path, jobs):
+#     with open(path, "a", encoding="utf-8") as f:
+#         for j in jobs:
+#             f.write(json.dumps(j, ensure_ascii=False) + "\n")
